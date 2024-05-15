@@ -269,7 +269,7 @@ class MakeHorizStreaksDataset(Dataset):
 def make_noise_loader(N, snr_db, batch_size, beta):
     _, val_transformations = _transforms()
     train_dataset, val_dataset, test_dataset = make_datasets()
-    bbox_info_file = "C:/Users/jack/fgvc/images_box.txt"
+    bbox_info_file = BBOX_FILE
     noise_dataset = MakeNoiseDataset(
         test_dataset,
         bbox_info_file,
