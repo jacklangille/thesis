@@ -6,7 +6,7 @@ from PIL import Image
 import numpy as np
 
 IMG_DIR = "/home/jwl/fgvc-aircraft-2013b/data/images/"
-IMG_ROOT = "/home/jwl/fgvc-aircraft-2013b/"
+IMG_ROOT = "/home/jwl/fgvc-aircraft-2013b/data/"
 BBOX_FILE = "/home/jwl/fgvc-aircraft-2013b/data/images_box.txt"
 
 
@@ -155,117 +155,6 @@ class MakeNoiseDataset(Dataset):
         return noise
 
 
-class MakeVertStreaksDataset(Dataset):
-    def __init__(
-        self,
-        base_dataset,
-        noise_info_file,
-        N,
-        num_streaks,
-        streak_color,
-        transform=None,
-    ):
-        self.base_dataset = base_dataset
-        self.num_streaks = num_streaks
-        self.streak_color = streak_color
-        self.transform = transform
-        self.noise_regions = {}
-        self.indices = np.random.choice(len(base_dataset), N, replace=False)
-        with open(noise_info_file, "r") as file:
-            for line in file:
-                parts = line.strip().split()
-                self.noise_regions[parts[0]] = tuple(map(int, parts[1:]))
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, idx):
-        img_name, label_idx = self.base_dataset.img_labels[self.indices[idx]]
-        img_path = os.path.join(self.base_dataset.images_dir, f"{img_name}.jpg")
-        image = Image.open(img_path)
-        image = image.convert("RGB")
-        image = image.crop((0, 0, image.width, image.height - 20))
-        if img_name in self.noise_regions:
-            bbox = self.noise_regions[img_name]
-            image = self.add_streaks_to_region(image, bbox)
-
-        image = self.transform(image)
-        label_tensor = torch.tensor(label_idx, dtype=torch.long)
-        return image, label_tensor
-
-    def add_streaks_to_region(self, image, bbox):
-        data = np.array(image)
-        x_min, y_min, x_max, y_max = bbox
-        region_width = x_max - x_min
-        region_height = y_max - y_min
-
-        streak_width = max(1, region_width // (2 * self.num_streaks))
-
-        color_value = 255 if self.streak_color == "white" else 0
-
-        for i in range(self.num_streaks):
-            start_x = x_min + 2 * i * streak_width
-            end_x = min(start_x + streak_width, x_max)
-
-            data[y_min:y_max, start_x:end_x] = color_value
-
-        return Image.fromarray(data)
-
-
-class MakeHorizStreaksDataset(Dataset):
-    def __init__(
-        self,
-        base_dataset,
-        noise_info_file,
-        N,
-        num_streaks,
-        streak_color,
-        transform=None,
-    ):
-        self.base_dataset = base_dataset
-        self.num_streaks = num_streaks
-        self.streak_color = streak_color
-        self.transform = transform
-        self.noise_regions = {}
-        self.indices = np.random.choice(len(base_dataset), N, replace=False)
-        with open(noise_info_file, "r") as file:
-            for line in file:
-                parts = line.strip().split()
-                self.noise_regions[parts[0]] = tuple(map(int, parts[1:]))
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, idx):
-        img_name, label_idx = self.base_dataset.img_labels[self.indices[idx]]
-        img_path = os.path.join(self.base_dataset.images_dir, f"{img_name}.jpg")
-        image = Image.open(img_path)
-        image = image.convert("RGB")
-        image = image.crop((0, 0, image.width, image.height - 20))
-        if img_name in self.noise_regions:
-            bbox = self.noise_regions[img_name]
-            image = self.add_streaks_to_region(image, bbox)
-
-        image = self.transform(image)
-        label_tensor = torch.tensor(label_idx, dtype=torch.long)
-        return image, label_tensor
-
-    def add_streaks_to_region(self, image, bbox):
-        data = np.array(image)
-        x_min, y_min, x_max, y_max = bbox
-        region_width = x_max - x_min
-        region_height = y_max - y_min
-        streak_height = max(1, region_height // (2 * self.num_streaks))
-        color_value = 255 if self.streak_color == "white" else 0
-
-        for i in range(self.num_streaks):
-            start_y = y_min + 2 * i * streak_height
-            end_y = min(start_y + streak_height, y_max)
-            data[start_y:end_y, x_min:x_max] = color_value
-
-        return Image.fromarray(data)
-
-
 def make_noise_loader(N, snr_db, batch_size, beta):
     _, val_transformations = _transforms()
     train_dataset, val_dataset, test_dataset = make_datasets()
@@ -279,32 +168,6 @@ def make_noise_loader(N, snr_db, batch_size, beta):
         transform=val_transformations,
     )
     return DataLoader(noise_dataset, batch_size=batch_size, shuffle=True)
-
-
-def make_streak_loader(n, num_streaks, streak_color, batch_size, orientation):
-    _, val_transformations = _transforms()
-    train_dataset, val_dataset, test_dataset = make_datasets()
-
-    if orientation == "vertical":
-        vert_dataset = MakeVertStreaksDataset(
-            test_dataset,
-            noise_info_file=BBOX_FILE,
-            N=n,
-            num_streaks=num_streaks,
-            streak_color=streak_color,
-            transform=val_transformations,
-        )
-        return DataLoader(vert_dataset, batch_size=batch_size, shuffle=True)
-    elif orientation == "horizontal":
-        horiz_dataset = MakeHorizStreaksDataset(
-            test_dataset,
-            noise_info_file=BBOX_FILE,
-            N=n,
-            num_streaks=num_streaks,
-            streak_color=streak_color,
-            transform=val_transformations,
-        )
-        return DataLoader(horiz_dataset, batch_size=32, shuffle=True)
 
 
 def make_regular_loaders():

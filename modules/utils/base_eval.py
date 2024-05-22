@@ -1,7 +1,7 @@
 import torch
 from sklearn.metrics import accuracy_score
 from tqdm import tqdm
-
+import numpy as np
 
 def evaluate(model, loader, device):
     model.eval()
