@@ -9,49 +9,35 @@ IMG_DIR = "/home/jwl/fgvc-aircraft-2013b/data/images/"
 IMG_ROOT = "/home/jwl/fgvc-aircraft-2013b/data/"
 BBOX_FILE = "/home/jwl/fgvc-aircraft-2013b/data/images_box.txt"
 
+base_transformations = [
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+]
+
+train_transformations = transforms.Compose(
+    base_transformations
+    + [
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(15),
+    ]
+)
+
+val_transformations = transforms.Compose(base_transformations)
+
 
 def make_datasets():
-    train_transformations, val_transformations = _transforms()
-
-    images_dir = IMG_DIR
-    file_root_dir = IMG_ROOT
     train_dataset = MakeDataset(
-        images_dir,
-        file_root_dir + "images_family_train.txt",
-        transform=train_transformations,
+        IMG_DIR, IMG_ROOT + "images_family_train.txt", transform=train_transformations
     )
     val_dataset = MakeDataset(
-        images_dir,
-        file_root_dir + "images_family_val.txt",
-        transform=val_transformations,
+        IMG_DIR, IMG_ROOT + "images_family_val.txt", transform=val_transformations
     )
     test_dataset = MakeDataset(
-        images_dir,
-        file_root_dir + "images_family_test.txt",
-        transform=val_transformations,
+        IMG_DIR, IMG_ROOT + "images_family_test.txt", transform=val_transformations
     )
     return train_dataset, val_dataset, test_dataset
-
-
-def _transforms():
-    train_transformations = transforms.Compose(
-        [
-            transforms.Resize((224, 224)),
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(15),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-    val_transformations = transforms.Compose(
-        [
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-    return train_transformations, val_transformations
 
 
 class MakeDataset(Dataset):
@@ -85,10 +71,22 @@ class MakeDataset(Dataset):
 
 
 class MakeNoiseDataset(Dataset):
-    def __init__(self, base_dataset, noise_info_file, N, snr_db, beta, transform=None):
+    def __init__(
+        self,
+        base_dataset,
+        noise_info_file,
+        N,
+        noise_type,
+        snr_db=None,
+        beta=None,
+        noise_density=None,
+        transform=None,
+    ):
         self.base_dataset = base_dataset
+        self.noise_type = noise_type
         self.snr_db = snr_db
         self.beta = beta
+        self.noise_density = noise_density
         self.transform = transform
         self.noise_regions = {}
         self.indices = np.random.choice(len(base_dataset), N, replace=False)
@@ -108,7 +106,10 @@ class MakeNoiseDataset(Dataset):
 
         if img_name in self.noise_regions:
             bbox = self.noise_regions[img_name]
-            image = self.add_noise_to_region(image, bbox)
+            if self.noise_type == "colored":
+                image = self.add_colored_noise_to_region(image, bbox)
+            elif self.noise_type == "impulse":
+                image = self.add_impulse_noise(image, bbox, self.noise_density)
 
         image = image.crop((0, 0, image.width, image.height - 20))
         image = self.transform(image)
@@ -116,7 +117,34 @@ class MakeNoiseDataset(Dataset):
         label_tensor = torch.tensor(label_idx, dtype=torch.long)
         return image, label_tensor
 
-    def add_noise_to_region(self, image, bbox):
+    def add_impulse_noise(self, image, bbox, density):
+        data = np.array(image)
+        x_min, y_min, x_max, y_max = bbox
+        region = data[y_min:y_max, x_min:x_max]
+        total_pixels = (x_max - x_min) * (y_max - y_min)
+        num_pixels = int(total_pixels * density)  # Total no. of pixels to noise
+
+        # Create masks for salt and pepper
+        pepper_mask = np.zeros(region.shape[:2], dtype=bool)
+        salt_mask = np.zeros(region.shape[:2], dtype=bool)
+
+        indices = np.random.choice(total_pixels, num_pixels, replace=False)
+        pepper_indices = indices[: num_pixels // 2]
+        salt_indices = indices[num_pixels // 2 :]
+
+        # Set the masks
+        pepper_mask.flat[pepper_indices] = True
+        salt_mask.flat[salt_indices] = True
+
+        # Apply the noise
+        region[pepper_mask] = 0  # Set pepper pixels to black
+        region[salt_mask] = 255  # Set salt pixels to white
+
+        # Update the image data
+        data[y_min:y_max, x_min:x_max] = region
+        return Image.fromarray(data)
+
+    def add_colored_noise_to_region(self, image, bbox):
         data = np.array(image, dtype=float)
         x_min, y_min, x_max, y_max = bbox
         region = data[y_min:y_max, x_min:x_max]
@@ -128,16 +156,22 @@ class MakeNoiseDataset(Dataset):
         noise_std = np.sqrt(noise_power)
 
         if self.beta == -2:
-            noise = self.spatial_pattern((y_max - y_min, x_max - x_min), self.beta)
-            sf = 255
-        elif self.beta == -1:
-            noise = np.random.randn(y_max - y_min, x_max - x_min)
-            sf = 255 / 10
+            # Generate single-channel noise
+            noise = (
+                self.spatial_pattern((y_max - y_min, x_max - x_min), self.beta)
+                * noise_std
+            )
+            # Replicate noise across all three channels
+            noise = np.stack((noise,) * 3, axis=-1)
+            region += noise
+        elif self.beta == 0:
+            # Generate single-channel Gaussian noise and replicate it across three channels
+            noise = np.random.normal(0, noise_std, size=(y_max - y_min, x_max - x_min))
+            noise = np.stack((noise,) * 3, axis=-1)
+            region += noise
 
-        noise *= noise_std * sf
-        for channel in range(3):
-            region[:, :, channel] = np.clip(region[:, :, channel] + noise, 0, 255)
-
+        # Ensure values remain within the correct range
+        region = np.clip(region, 0, 255)
         data[y_min:y_max, x_min:x_max] = region.astype(np.uint8)
 
         return Image.fromarray(data.astype(np.uint8))
@@ -155,24 +189,27 @@ class MakeNoiseDataset(Dataset):
         return noise
 
 
-def make_noise_loader(N, snr_db, batch_size, beta):
-    _, val_transformations = _transforms()
+def make_regular_loaders(batch_size=32):
     train_dataset, val_dataset, test_dataset = make_datasets()
-    bbox_info_file = BBOX_FILE
+    return (
+        DataLoader(train_dataset, batch_size=batch_size, shuffle=True),
+        DataLoader(val_dataset, batch_size=batch_size, shuffle=True),
+        DataLoader(test_dataset, batch_size=batch_size, shuffle=True),
+    )
+
+
+def make_noise_loader(
+    N, noise_type, snr_db=None, beta=None, noise_density=None, batch_size=32
+):
+    train_dataset, val_dataset, test_dataset = make_datasets()
     noise_dataset = MakeNoiseDataset(
         test_dataset,
-        bbox_info_file,
+        BBOX_FILE,
         N,
-        snr_db,
-        beta,
+        noise_type,
+        snr_db=snr_db,
+        beta=beta,
+        noise_density=noise_density,
         transform=val_transformations,
     )
     return DataLoader(noise_dataset, batch_size=batch_size, shuffle=True)
-
-
-def make_regular_loaders():
-    train_dataset, val_dataset, test_dataset = make_datasets()
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=True)
-    return train_loader, val_loader, test_loader

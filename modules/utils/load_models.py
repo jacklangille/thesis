@@ -10,8 +10,11 @@ from torch.ao.quantization._learnable_fake_quantize import (
 )
 from torch.ao.quantization.quantize_fx import prepare_qat_fx
 from torch.ao.quantization.qconfig_mapping import QConfigMapping
-RESNET_PATH = "/home/jwl/thesis/trained_models/training_checkpoints/resnet/resnet_epoch_70.pth" 
-SQUEEZENET_PATH = "/home/jwl/thesis/trained_models/training_checkpoints/squeezenet/squeezenet_epoch_70.pth" 
+
+RESNET_PATH = "/home/jwl/thesis/training_checkpoints/resnet/resnet_epoch_70.pth"
+SQUEEZENET_PATH = (
+    "/home/jwl/thesis/training_checkpoints/squeezenet/squeezenet_epoch_70.pth"
+)
 
 
 def load_base_squeezenet(num_classes=70):
